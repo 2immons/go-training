@@ -1,3 +1,5 @@
+// go run . --src="../src.txt" --dst="../test"
+
 package main
 
 import (
@@ -10,6 +12,7 @@ import (
 )
 
 func main() {
+	// считывание файла в отдельную функцию
 	srcPath := flag.String("src", "", "Source file path")
 	inputPath := flag.String("dst", "", "Destination dir")
 	flag.Parse()
@@ -38,36 +41,25 @@ func main() {
 	// используем waitGroup для ожидания завершения всех горутин
 	var wg sync.WaitGroup
 	// используем канал для передачи результатов обработки URL в горутине
-	channelResults := make(chan string)
 
 	for i := 0; i < len(urls); i++ {
 		// с каждым новым urls[i] увеличиваем счетчик wg горутин и запускаем отдельную горутину для обработки urls[i]
 		wg.Add(1)
-		go processURL(urls[i], *inputPath, &fileCounter, &wg, channelResults)
+		go processURL(urls[i], *inputPath, &fileCounter, &wg)
 	}
 
-	// создаем цикл, который блокируется и ожидает появления данных в канале channelResults
-	// он выводит данные как только они появляются в канале
-	for result := range channelResults {
-		fmt.Println(result)
-	}
-
-	// ждем завершения всех горутин обработки URL в цикле for (т.е. пока wg счетчик не станет равным 0);
-	// затем закрываем канал с помощью еще одной анонимной горутины, чтобы сообщить каналу, что данных больше не будет
-	go func() {
-		wg.Wait()
-		close(channelResults)
-	}()
+	// ждем завершения всех горутин обработки URL в цикле for (т.е. пока wg счетчик не станет равным 0)
+	wg.Wait()
 }
 
 // функция обработки URL
-func processURL(url, inputPath string, counter *int, wg *sync.WaitGroup, channelResults chan<- string) {
+func processURL(url, inputPath string, counter *int, wg *sync.WaitGroup) {
 	// уменьшаем счетчик горутин на -1 после отработки очередной
 	defer wg.Done()
 
 	response, err := http.Get(url)
 	if err != nil {
-		channelResults <- fmt.Sprintf("Response wasn't grabbed: Wrong URL scheme of %s", url)
+		fmt.Printf("Response wasn't grabbed: Wrong URL scheme of %s\n", url)
 		return
 	}
 	defer response.Body.Close()
@@ -78,7 +70,7 @@ func processURL(url, inputPath string, counter *int, wg *sync.WaitGroup, channel
 		outputFile, err := os.Create(path)
 
 		if err != nil {
-			channelResults <- fmt.Sprintf("Unable to create file: %v", err)
+			fmt.Printf("Unable to create file: %v\n", err)
 			return
 		}
 		defer outputFile.Close()
@@ -89,11 +81,11 @@ func processURL(url, inputPath string, counter *int, wg *sync.WaitGroup, channel
 		}
 
 		if err := scanner.Err(); err != nil {
-			channelResults <- fmt.Sprintf("Error reading response body: %v", err)
+			fmt.Printf("Error reading response body: %v\n", err)
 			return
 		}
-		channelResults <- fmt.Sprintf("Response was grabbed: %s", url)
+		fmt.Printf("Response was grabbed: %s\n", url)
 	} else {
-		channelResults <- fmt.Sprintf("Response wasn't grabbed: Wrong response status of %s", url)
+		fmt.Printf("Response wasn't grabbed: Wrong response status of %s\n", url)
 	}
 }
