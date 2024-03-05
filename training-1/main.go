@@ -1,8 +1,19 @@
 package main
 
-import "fmt"
+import (
+	"flag"
+	"fmt"
+)
 
 func main() {
-	name := "Go Developers22"
-	fmt.Println("Azure for", name)
+	// Определение флагов
+	src := flag.String("src", "", "Source file path")
+	dst := flag.String("dst", "", "Destination file path")
+
+	// Парсинг командной строки
+	flag.Parse()
+
+	// Вывод значений флагов
+	fmt.Println("Source:", *src)
+	fmt.Println("Destination:", *dst)
 }
