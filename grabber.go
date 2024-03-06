@@ -3,12 +3,12 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 )
 
@@ -51,13 +51,28 @@ func checkFatalError(err error) {
 // openAndReadFile() []string открывает файл по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
 // если случается ошибка (error), завершает программу с помощью функции checkFatalError()
 func openAndReadFile(srcFileUrls string) []string {
-	content, err := os.ReadFile(srcFileUrls)
+	file, err := os.Open(srcFileUrls)
 	checkFatalError(err)
+	defer file.Close()
 
-	// Разделение содержимого файла на строки
-	urls := strings.Split(string(content), "\r\n")
+	var urls []string
+
+	// для универсального подхода к разным ОС используем scanner и считываем строки в urls[]
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		urls = append(urls, scanner.Text())
+	}
+	checkFatalError(scanner.Err())
 
 	return urls
+
+	// content, err := os.ReadFile(srcFileUrls)
+	// checkFatalError(err)
+
+	// // Разделение содержимого файла на строки
+	// urls := strings.Split(string(content), "\n")
+
+	// return urls
 }
 
 // createDir() создает директорию по указанному в dirPath пути:
