@@ -9,72 +9,80 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 )
 
 func main() {
-	// инициализируем счетчик создаваемых файлов для перечисления, начиная с ../1.txt
-	fileCounter := 1
+	start := time.Now()
 
-	// парсинг флагов
-	srcFileUrls := flag.String("src", "", "Путь к файлу источнику")
-	dirPath := flag.String("dst", "", "Путь к директории назначения")
+	srcFileUrls := flag.String("src", "DEFAULT VALUE", "Путь к файлу источнику")
+	dirPath := flag.String("dst", "DEFAULT VALUE", "Путь к директории назначения")
+
 	flag.Parse()
 
-	// открываем файл, читаем его в urls []string, завершаем программу, если получили ошибку при чтении
-	urls, fileError := openAndReadFile(*srcFileUrls)
-	if fileError != nil {
-		fmt.Println(fileError)
+	if *dirPath == "DEFAULT VALUE" {
+		fmt.Fprintf(os.Stderr, "Введите параметры:\n")
+		flag.VisitAll(func(f *flag.Flag) {
+			fmt.Fprintf(os.Stderr, " --%s - %s\n", f.Name, f.Usage)
+		})
 		os.Exit(1)
-		return
 	}
 
-	// создаем директорию по пути пользователя, завершаем программу, если получили ошибку при создании
-	dirError := createDir(*dirPath)
-	if dirError != nil {
-		fmt.Println(dirError)
+	// инициализация счетчика создаваемых файлов для перечисления, начиная с ../1.txt
+	fileCounter := 1
+
+	// чтение URLs из файла
+	urls, err := openReadSourceFile(*srcFileUrls)
+	if err != nil {
+		fmt.Println(err)
 		os.Exit(2)
-		return
 	}
 
-	// используем sync.waitGroup для ожидания завершения всех горутин
+	// создание директории по пути пользователя
+	err = createDir(*dirPath)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(2)
+	}
+
+	// использование sync.waitGroup для ожидания завершения всех горутин
 	var wg sync.WaitGroup
 
-	// увеличиваем счетчик горутин wg, создавая для обработки каждого url свою горутину
+	// увеличение счетчика горутин wg, создавая для обработки каждого url свою горутину
 	for _, url := range urls {
 		wg.Add(1)
 		go processURL(url, *dirPath, &fileCounter, &wg)
 	}
 
-	// ждем завершения всех горутин обработки URL в цикле for range
+	// ожидание завершения всех горутин обработки URL в цикле for range
 	wg.Wait()
+	duration := time.Since(start)
+	fmt.Println(duration)
 }
 
-// openAndReadFile() []string открывает файл по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
+// openReadSourceFile() []string открывает файл по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
 // если случается ошибка (error), возвращает ее
-func openAndReadFile(srcFileUrls string) ([]string, error) {
+func openReadSourceFile(srcFileUrls string) ([]string, error) {
 	file, err := os.Open(srcFileUrls)
 	if err != nil {
-		fmt.Println(err)
 		return nil, err
 	}
 	defer file.Close()
 
 	var urls []string
 
-	// для универсального подхода к разным ОС используем scanner
+	// для универсального подхода к разным ОС используется scanner
 	scanner := bufio.NewScanner(file)
-	var scannerErr error
 
-	// сканируем каждую строчку и добавляем в urls
+	// сканирование каждой строчки и добавление в urls
 	for scanner.Scan() {
 		urls = append(urls, scanner.Text())
-		scannerErr = scanner.Err()
-	}
-
-	if scannerErr != nil {
-		fmt.Println(err)
-		return nil, scannerErr
+		if scanner.Err() != nil {
+			fmt.Println(err)
+			return nil, scanner.Err()
+		}
 	}
 
 	return urls, nil
@@ -85,53 +93,60 @@ func openAndReadFile(srcFileUrls string) ([]string, error) {
 func createDir(dirPath string) error {
 	err := os.Mkdir(dirPath, os.ModePerm)
 	if err != nil {
-		fmt.Println(err)
+		if os.IsExist(err) {
+			return nil
+		}
 		return err
 	}
-	return err
+	return nil
 }
 
 // processURL() уменьшает счетчик горутин wg на -1, отправляет GET-запрос по url и проверяет получен ли корректный response:
 // если получен корректный ответ, вызывает функцию создания файла createFile() в директории dirPath;
 // если ответ не получен или ответ некорректный, печатает сообщение об ошибке
-func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) {
+func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) error {
 	defer wg.Done()
 
 	response, err := http.Get(url)
 	if err != nil || response.Status != "200 OK" {
-		fmt.Printf("Ответ не получен или некорректный формат URL. URL: %s\n", url)
-		return
+		if err != nil {
+			fmt.Printf("Ответ не получен. Некорректный формат URL. Ошибка: %s. URL: %s\n", err, url)
+			return err
+		} else {
+			fmt.Printf("Ответ не получен. Некорректный статус (не 200 OK). URL: %s\n", url)
+			return nil
+		}
 	}
-
-	// ВОПРОС на будущее:
-	// Мы обсуждали, что манипуляции с https и дескриптерами должны быть вынесены в отдельную функцию, чтобы https и дескриптер могли закрыться,
-	// но ведь у меня происходит return на 79 строчке в случае ошибки и тогда defer Close() должен сработать, разве нет?
-	// Или же я не так понял?
 	defer response.Body.Close()
 
-	createFile(url, dirPath, fileCounter, response)
+	err = createFile(url, dirPath, *fileCounter, response)
+	if err != nil {
+		return err
+	}
+
+	*fileCounter++
+
+	return nil
 }
 
 // createFile() создает файл по пути [dirPath]/[fileCounter].txt с содержимым из response.Body, а также увеличивает счетчик fileCounter, если не было ошибок
 // если при создании или чтении response.Body случается ошибка (error), то выводит сообщение об ошибке
-func createFile(url, dirPath string, fileCounter *int, response *http.Response) {
-	filePath := fmt.Sprintf("%s/%s.txt", dirPath, fmt.Sprint(*fileCounter))
+func createFile(url, dirPath string, fileCounter int, response *http.Response) error {
+	filePath := fmt.Sprintf("%s/%s.txt", dirPath, strconv.Itoa(fileCounter))
 	newFile, err := os.Create(filePath)
 	if err != nil {
-		fmt.Printf("Ошибка создания файла: %v из URL: %s\n", err, url)
-		return
+		fmt.Printf("Ошибка создания файла: %v. URL: %s\n", err, url)
+		return err
 	}
-
-	// такой же ВОПРОС на будущее, что и с https, та же ситуация:
 	defer newFile.Close()
-
-	*fileCounter++
 
 	_, err = io.Copy(newFile, response.Body)
 	if err != nil {
 		fmt.Printf("Ошибка копирования тела ответа в файл: %v из URL: %s\n", err, url)
-		return
+		return err
 	}
 
-	fmt.Printf("Ответ получен. Файл с содержимым создан по пути: %s. URL: %s\n", filePath, url)
+	fmt.Printf("Файл с содержимым создан по пути: %s. URL: %s\n", filePath, url)
+
+	return nil
 }
