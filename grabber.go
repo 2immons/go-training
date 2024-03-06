@@ -21,11 +21,21 @@ func main() {
 	dirPath := flag.String("dst", "", "Путь к директории назначения")
 	flag.Parse()
 
-	// открываем файл, читаем его в urls []string
-	urls := openAndReadFile(*srcFileUrls)
+	// открываем файл, читаем его в urls []string, завершаем программу, если получили ошибку при чтении
+	urls, fileError := openAndReadFile(*srcFileUrls)
+	if fileError != nil {
+		fmt.Println(fileError)
+		os.Exit(1)
+		return
+	}
 
-	// создаем директорию по пути пользователя
-	createDir(*dirPath)
+	// создаем директорию по пути пользователя, завершаем программу, если получили ошибку при создании
+	dirError := createDir(*dirPath)
+	if dirError != nil {
+		fmt.Println(dirError)
+		os.Exit(2)
+		return
+	}
 
 	// используем sync.waitGroup для ожидания завершения всех горутин
 	var wg sync.WaitGroup
@@ -40,46 +50,45 @@ func main() {
 	wg.Wait()
 }
 
-// checkFatalError() проверяет содержится ли фатальная ошибка и завершает программу, если содержится
-func checkFatalError(err error) {
+// openAndReadFile() []string открывает файл по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
+// если случается ошибка (error), возвращает ее
+func openAndReadFile(srcFileUrls string) ([]string, error) {
+	file, err := os.Open(srcFileUrls)
 	if err != nil {
 		fmt.Println(err)
-		os.Exit(1)
+		return nil, err
 	}
-}
-
-// openAndReadFile() []string открывает файл по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
-// если случается ошибка (error), завершает программу с помощью функции checkFatalError()
-func openAndReadFile(srcFileUrls string) []string {
-	file, err := os.Open(srcFileUrls)
-	checkFatalError(err)
 	defer file.Close()
 
 	var urls []string
 
-	// для универсального подхода к разным ОС используем scanner и считываем строки в urls[]
+	// для универсального подхода к разным ОС используем scanner
 	scanner := bufio.NewScanner(file)
+	var scannerErr error
+
+	// сканируем каждую строчку и добавляем в urls
 	for scanner.Scan() {
 		urls = append(urls, scanner.Text())
+		scannerErr = scanner.Err()
 	}
-	checkFatalError(scanner.Err())
 
-	return urls
+	if scannerErr != nil {
+		fmt.Println(err)
+		return nil, scannerErr
+	}
 
-	// content, err := os.ReadFile(srcFileUrls)
-	// checkFatalError(err)
-
-	// // Разделение содержимого файла на строки
-	// urls := strings.Split(string(content), "\n")
-
-	// return urls
+	return urls, nil
 }
 
 // createDir() создает директорию по указанному в dirPath пути:
-// если случается ошибка (error), завершает программу с помощью функции checkFatalError()
-func createDir(dirPath string) {
+// если случается ошибка (error), возвращает ее
+func createDir(dirPath string) error {
 	err := os.Mkdir(dirPath, os.ModePerm)
-	checkFatalError(err)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+	return err
 }
 
 // processURL() уменьшает счетчик горутин wg на -1, отправляет GET-запрос по url и проверяет получен ли корректный response:
