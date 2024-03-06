@@ -23,9 +23,9 @@ func main() {
 	flag.Parse()
 
 	if *dirPath == "DEFAULT VALUE" {
-		fmt.Fprintf(os.Stderr, "Введите параметры:\n")
+		fmt.Println("Введите параметры:")
 		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(os.Stderr, " --%s - %s\n", f.Name, f.Usage)
+			fmt.Printf(" --%s - %s\n", f.Name, f.Usage)
 		})
 		os.Exit(1)
 	}
