@@ -6,10 +6,10 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"io"
+	"io/fs"
+	"io/ioutil"
 	"net/http"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -17,54 +17,56 @@ import (
 func main() {
 	start := time.Now()
 
-	srcFileUrls := flag.String("src", "DEFAULT VALUE", "Путь к файлу источнику")
-	dirPath := flag.String("dst", "DEFAULT VALUE", "Путь к директории назначения")
-
-	flag.Parse()
-
-	if *dirPath == "DEFAULT VALUE" {
-		fmt.Println("Введите параметры:")
-		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Printf(" --%s - %s\n", f.Name, f.Usage)
-		})
-		os.Exit(1)
-	}
+	// парсинг флагов терминала
+	srcFilePath, dirPath := parseFlags()
 
 	// инициализация счетчика создаваемых файлов для перечисления, начиная с ../1.txt
 	fileCounter := 1
 
-	// чтение URLs из файла
-	urls, err := openReadSourceFile(*srcFileUrls)
+	// чтение и получение URLs из файла
+	urls, err := openReadSourceFile(*srcFilePath)
 	if err != nil {
-		fmt.Println(err)
 		os.Exit(2)
 	}
 
-	// создание директории по пути пользователя
+	// создание директории по заданному пути
 	err = createDir(*dirPath)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(2)
+		os.Exit(3)
 	}
 
 	// использование sync.waitGroup для ожидания завершения всех горутин
 	var wg sync.WaitGroup
 
-	// увеличение счетчика горутин wg, создавая для обработки каждого url свою горутину
+	// увеличение счетчика горутин wg, создание для обработки каждого url своей горутины
 	for _, url := range urls {
 		wg.Add(1)
 		go processURL(url, *dirPath, &fileCounter, &wg)
 	}
 
-	// ожидание завершения всех горутин обработки URL в цикле for range
 	wg.Wait()
-	duration := time.Since(start)
-	fmt.Println(duration)
+
+	duration := time.Since(start).Seconds()
+	fmt.Printf("Длительность выполнения в секундах: %f\n", duration)
 }
 
-// openReadSourceFile() []string открывает файл по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
-// если случается ошибка (error), возвращает ее
+// parseFlags парсит флаги терминала и возвращает их
+func parseFlags() (*string, *string) {
+	srcFilePath := flag.String("src", "DEFAULT VALUE", "Путь к файлу источнику")
+	dirPath := flag.String("dst", "DEFAULT VALUE", "Путь к директории назначения")
+
+	flag.Parse()
+
+	if *dirPath == "DEFAULT VALUE" {
+		flag.VisitAll(func(f *flag.Flag) {})
+	}
+
+	return srcFilePath, dirPath
+}
+
+// openReadSourceFile по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
 func openReadSourceFile(srcFileUrls string) ([]string, error) {
+	// открытие файла
 	file, err := os.Open(srcFileUrls)
 	if err != nil {
 		return nil, err
@@ -73,10 +75,10 @@ func openReadSourceFile(srcFileUrls string) ([]string, error) {
 
 	var urls []string
 
-	// для универсального подхода к разным ОС используется scanner
+	// для универсального подхода к разным ОС для чтения используется scanner
 	scanner := bufio.NewScanner(file)
 
-	// сканирование каждой строчки и добавление в urls
+	// сканирование построчно файла и добавление в urls
 	for scanner.Scan() {
 		urls = append(urls, scanner.Text())
 		if scanner.Err() != nil {
@@ -88,8 +90,7 @@ func openReadSourceFile(srcFileUrls string) ([]string, error) {
 	return urls, nil
 }
 
-// createDir() создает директорию по указанному в dirPath пути:
-// если случается ошибка (error), возвращает ее
+// createDir создает директорию по указанному в dirPath пути
 func createDir(dirPath string) error {
 	err := os.Mkdir(dirPath, os.ModePerm)
 	if err != nil {
@@ -101,9 +102,7 @@ func createDir(dirPath string) error {
 	return nil
 }
 
-// processURL() уменьшает счетчик горутин wg на -1, отправляет GET-запрос по url и проверяет получен ли корректный response:
-// если получен корректный ответ, вызывает функцию создания файла createFile() в директории dirPath;
-// если ответ не получен или ответ некорректный, печатает сообщение об ошибке
+// processURL проверяет получен ли корректный response и вызывает функцию создания файла createFile() в директории dirPath
 func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) error {
 	defer wg.Done()
 
@@ -119,7 +118,14 @@ func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) error
 	}
 	defer response.Body.Close()
 
-	err = createFile(url, dirPath, *fileCounter, response)
+	// чтение байтов из response.Body
+	fileBytes, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+
+	// вызов функции создания файла и записи в него байтов
+	err = createFile(url, dirPath, *fileCounter, fileBytes)
 	if err != nil {
 		return err
 	}
@@ -129,24 +135,17 @@ func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) error
 	return nil
 }
 
-// createFile() создает файл по пути [dirPath]/[fileCounter].txt с содержимым из response.Body, а также увеличивает счетчик fileCounter, если не было ошибок
-// если при создании или чтении response.Body случается ошибка (error), то выводит сообщение об ошибке
-func createFile(url, dirPath string, fileCounter int, response *http.Response) error {
-	filePath := fmt.Sprintf("%s/%s.txt", dirPath, strconv.Itoa(fileCounter))
-	newFile, err := os.Create(filePath)
-	if err != nil {
-		fmt.Printf("Ошибка создания файла: %v. URL: %s\n", err, url)
-		return err
-	}
-	defer newFile.Close()
+// createFile создает файл по и записывает в него срез байтов
+func createFile(url, dirPath string, fileCounter int, fileBytes []byte) error {
+	path := fmt.Sprintf("%s/%d.txt", dirPath, fileCounter)
 
-	_, err = io.Copy(newFile, response.Body)
+	err := ioutil.WriteFile(path, fileBytes, fs.ModePerm)
 	if err != nil {
 		fmt.Printf("Ошибка копирования тела ответа в файл: %v из URL: %s\n", err, url)
 		return err
 	}
 
-	fmt.Printf("Файл с содержимым создан по пути: %s. URL: %s\n", filePath, url)
+	fmt.Printf("Файл с содержимым создан по пути: %s. URL: %s\n", path, url)
 
 	return nil
 }
