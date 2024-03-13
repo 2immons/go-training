@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -18,19 +19,22 @@ func main() {
 	start := time.Now()
 
 	// парсинг флагов терминала
-	srcFilePath, dirPath := parseFlags()
+	srcFilePath, dirPath, err := parseFlags()
+	if err != nil {
+		os.Exit(1)
+	}
 
 	// инициализация счетчика создаваемых файлов для перечисления, начиная с ../1.txt
 	fileCounter := 1
 
 	// чтение и получение URLs из файла
-	urls, err := openReadSourceFile(*srcFilePath)
+	urls, err := openReadSourceFile(srcFilePath)
 	if err != nil {
 		os.Exit(2)
 	}
 
 	// создание директории по заданному пути
-	err = createDir(*dirPath)
+	err = createDir(dirPath)
 	if err != nil {
 		os.Exit(3)
 	}
@@ -41,7 +45,10 @@ func main() {
 	// увеличение счетчика горутин wg, создание для обработки каждого url своей горутины
 	for _, url := range urls {
 		wg.Add(1)
-		go processURL(url, *dirPath, &fileCounter, &wg)
+		go func(url string) {
+			processURL(url, dirPath, &fileCounter)
+			wg.Done()
+		}(url)
 	}
 
 	wg.Wait()
@@ -51,17 +58,24 @@ func main() {
 }
 
 // parseFlags парсит флаги терминала и возвращает их
-func parseFlags() (*string, *string) {
-	srcFilePath := flag.String("src", "DEFAULT VALUE", "Путь к файлу источнику")
-	dirPath := flag.String("dst", "DEFAULT VALUE", "Путь к директории назначения")
+func parseFlags() (string, string, error) {
+	var srcFilePath string
+	flag.StringVar(&srcFilePath, "src", "DEFAULT VALUE", "путь к файлу источнику")
+	var dirPath string
+	flag.StringVar(&dirPath, "dst", "DEFAULT VALUE", "путь к директории назначения")
 
 	flag.Parse()
 
-	if *dirPath == "DEFAULT VALUE" {
-		flag.VisitAll(func(f *flag.Flag) {})
+	if srcFilePath == "DEFAULT VALUE" || dirPath == "DEFAULT VALUE" {
+		errMsg := "Ошибка в параметрах. Введите параметры или проверьте корректность их ввода:\n"
+		flag.VisitAll(func(f *flag.Flag) {
+			errMsg += fmt.Sprintf(" --%s - %s\n", f.Name, f.Usage)
+		})
+		fmt.Println(errMsg)
+		return "", "", fmt.Errorf(errMsg)
 	}
 
-	return srcFilePath, dirPath
+	return srcFilePath, dirPath, nil
 }
 
 // openReadSourceFile по указанному в srcFileUrls пути и возвращает массив []string URL'ов:
@@ -90,7 +104,7 @@ func openReadSourceFile(srcFileUrls string) ([]string, error) {
 	return urls, nil
 }
 
-// createDir создает директорию по указанному в dirPath пути
+// createDir создает директорию по указанному в dirPath пути, если ее не существует
 func createDir(dirPath string) error {
 	err := os.Mkdir(dirPath, os.ModePerm)
 	if err != nil {
@@ -103,18 +117,17 @@ func createDir(dirPath string) error {
 }
 
 // processURL проверяет получен ли корректный response и вызывает функцию создания файла createFile() в директории dirPath
-func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) error {
-	defer wg.Done()
-
+func processURL(url, dirPath string, fileCounter *int) error {
 	response, err := http.Get(url)
-	if err != nil || response.Status != "200 OK" {
-		if err != nil {
-			fmt.Printf("Ответ не получен. Некорректный формат URL. Ошибка: %s. URL: %s\n", err, url)
-			return err
-		} else {
-			fmt.Printf("Ответ не получен. Некорректный статус (не 200 OK). URL: %s\n", url)
-			return nil
-		}
+	if err != nil || response.StatusCode != http.StatusOK {
+		fmt.Printf("Ответ не получен. Некорректный формат URL. Ошибка: %s. URL: %s\n", err, url)
+		return err
+	}
+	if response.StatusCode != http.StatusOK {
+		errMsg := fmt.Sprintf("Ответ не получен. Некорректный статус (не 200 OK). URL: %s\n", url)
+		err = fmt.Errorf(errMsg)
+		fmt.Println(errMsg)
+		return err
 	}
 	defer response.Body.Close()
 
@@ -137,7 +150,9 @@ func processURL(url, dirPath string, fileCounter *int, wg *sync.WaitGroup) error
 
 // createFile создает файл по и записывает в него срез байтов
 func createFile(url, dirPath string, fileCounter int, fileBytes []byte) error {
-	path := fmt.Sprintf("%s/%d.txt", dirPath, fileCounter)
+	creationTime := time.Now().Format("02-01-2006__15-04-05")
+	fileName := fmt.Sprintf("%d__%s.txt", fileCounter, creationTime)
+	path := filepath.Join(dirPath, fileName)
 
 	err := ioutil.WriteFile(path, fileBytes, fs.ModePerm)
 	if err != nil {
@@ -145,7 +160,7 @@ func createFile(url, dirPath string, fileCounter int, fileBytes []byte) error {
 		return err
 	}
 
-	fmt.Printf("Файл с содержимым создан по пути: %s. URL: %s\n", path, url)
+	fmt.Printf("Файл создан по пути: %s. URL: %s\n", path, url)
 
 	return nil
 }
