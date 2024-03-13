@@ -6,8 +6,8 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -67,12 +67,7 @@ func parseFlags() (string, string, error) {
 	flag.Parse()
 
 	if srcFilePath == "DEFAULT VALUE" || dirPath == "DEFAULT VALUE" {
-		errMsg := "Ошибка в параметрах. Введите параметры или проверьте корректность их ввода:\n"
-		flag.VisitAll(func(f *flag.Flag) {
-			errMsg += fmt.Sprintf(" --%s - %s\n", f.Name, f.Usage)
-		})
-		fmt.Println(errMsg)
-		return "", "", fmt.Errorf(errMsg)
+		flag.Usage()
 	}
 
 	return srcFilePath, dirPath, nil
@@ -119,20 +114,21 @@ func createDir(dirPath string) error {
 // processURL проверяет получен ли корректный response и вызывает функцию создания файла createFile() в директории dirPath
 func processURL(url, dirPath string, fileCounter *int) error {
 	response, err := http.Get(url)
-	if err != nil || response.StatusCode != http.StatusOK {
-		fmt.Printf("Ответ не получен. Некорректный формат URL. Ошибка: %s. URL: %s\n", err, url)
-		return err
-	}
-	if response.StatusCode != http.StatusOK {
-		errMsg := fmt.Sprintf("Ответ не получен. Некорректный статус (не 200 OK). URL: %s\n", url)
-		err = fmt.Errorf(errMsg)
-		fmt.Println(errMsg)
+	if err != nil {
+		fmt.Printf("Ответ не получен. Ошибка: %s. URL: %s\n", err, url)
 		return err
 	}
 	defer response.Body.Close()
 
+	if response.StatusCode != http.StatusOK {
+		errMsg := fmt.Sprintf("Ответ не получен. Ошибка: некорректный адрес. URL: %s\n", url)
+		err = fmt.Errorf(errMsg)
+		fmt.Println(errMsg)
+		return err
+	}
+
 	// чтение байтов из response.Body
-	fileBytes, err := ioutil.ReadAll(response.Body)
+	fileBytes, err := io.ReadAll(response.Body)
 	if err != nil {
 		return err
 	}
@@ -154,7 +150,7 @@ func createFile(url, dirPath string, fileCounter int, fileBytes []byte) error {
 	fileName := fmt.Sprintf("%d__%s.txt", fileCounter, creationTime)
 	path := filepath.Join(dirPath, fileName)
 
-	err := ioutil.WriteFile(path, fileBytes, fs.ModePerm)
+	err := os.WriteFile(path, fileBytes, fs.ModePerm)
 	if err != nil {
 		fmt.Printf("Ошибка копирования тела ответа в файл: %v из URL: %s\n", err, url)
 		return err
